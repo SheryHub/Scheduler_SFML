@@ -507,11 +507,11 @@ public:
                         break;
                         
                     case sf::Keyboard::S:
-                        saveToFile("mlq_data.txt");
+                        saveToFile("data.txt");
                         break;
                         
                     case sf::Keyboard::L:
-                        loadFromFile("mlq_data.txt");
+                        loadFromFile("data.txt");
                         break;
                         
                     case sf::Keyboard::Escape:
