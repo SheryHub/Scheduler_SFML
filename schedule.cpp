@@ -7,6 +7,7 @@
 #include <sstream>
 #include <iomanip>
 #include <fstream>
+#include <cmath>
 
 using namespace std;
 
@@ -21,9 +22,11 @@ struct Process {
     sf::Vector2f position;
     sf::Vector2f target_position;
     bool is_executing = false;
-    int queue_index = -1;
+    int queue_index = 0; // Start in queue 0
     int last_execution_time = 0;
     int time_slice_remaining = 0; // For Round Robin
+    int execution_time_in_current_queue = 0; // Track execution time in current queue
+    int allowed_time_in_queue = 0; // How much time allowed in current queue
 };
 
 struct SimulationData {
@@ -43,6 +46,7 @@ private:
     vector<int> sequence;
     int time_quantum;
     int current_time;
+    int num_queues;
     int current_executing_queue;
     Process* current_executing_process;
     bool simulation_running;
@@ -71,8 +75,8 @@ private:
     };
 
 public:
-    MLQVisualizer() : window(sf::VideoMode(1400, 900), "Multilevel Queue Scheduler Visualization"),
-                      queues(4), animation_speed(1.0f), current_time(0), current_executing_queue(-1),
+    MLQVisualizer() : window(sf::VideoMode(1400, 900), "Multilevel Feedback Queue Scheduler Visualization"),
+                      num_queues(4), queues(4), animation_speed(1.0f), current_time(0), current_executing_queue(-1),
                       current_executing_process(nullptr), simulation_running(false), 
                       simulation_paused(false), simulation_completed(false) {
         
@@ -115,7 +119,7 @@ public:
             averages_text.setFont(font);
         }
         
-        title_text.setString("Multilevel Queue Scheduler Visualization");
+        title_text.setString("Multilevel Feedback Queue Scheduler Visualization");
         title_text.setCharacterSize(24);
         title_text.setFillColor(sf::Color::White);
         title_text.setPosition(10, 10);
@@ -152,9 +156,11 @@ public:
             file << process.arrival_time << " " << process.burst_time << " " << process.priority << "\n";
         }
         
-        for (int i = 0; i < 4; i++) {
+        file << num_queues << "\n";
+        
+        for (int i = 0; i < num_queues; i++) {
             file << sequence[i];
-            if (i < 3) file << " ";
+            if (i < num_queues - 1) file << " ";
         }
         file << "\n";
         
@@ -179,8 +185,10 @@ public:
             file >> loaded_processes[i].arrival_time >> loaded_processes[i].burst_time >> loaded_processes[i].priority;
         }
         
-        vector<int> loaded_sequence(4);
-        for (int i = 0; i < 4; i++) {
+        file >> num_queues;
+        
+        vector<int> loaded_sequence(num_queues);
+        for (int i = 0; i < num_queues; i++) {
             file >> loaded_sequence[i];
         }
         
@@ -196,6 +204,7 @@ public:
         processes = input_processes;
         sequence = sched_sequence;
         time_quantum = quantum;
+        queues.resize(num_queues);
         
         // Assign colors to processes
         for (size_t i = 0; i < processes.size(); i++) {
@@ -204,21 +213,39 @@ public:
             processes[i].finished = false;
             processes[i].started = false;
             processes[i].time_slice_remaining = 0;
+            processes[i].queue_index = 0; // All processes start in queue 0
+            processes[i].execution_time_in_current_queue = 0;
+            processes[i].allowed_time_in_queue = calculateAllowedTime(processes[i], 0);
         }
         
-        // Distribute processes to queues (round-robin distribution)
-        for (int i = 0; i < 4; i++) {
+        // Clear all queues and add all processes to queue 0
+        for (int i = 0; i < num_queues; i++) {
             queues[i].clear();
         }
         
         for (size_t i = 0; i < processes.size(); i++) {
-            int queue_index = i % 4;
-            processes[i].queue_index = queue_index;
-            queues[queue_index].push_back(&processes[i]);
+            queues[0].push_back(&processes[i]);
         }
         
         positionProcesses();
         resetSimulation();
+    }
+    
+    int calculateAllowedTime(const Process& process, int queue_index) {
+        int algorithm = sequence[queue_index];
+        
+        // For the last queue (index 3), no time limit
+        if (queue_index ==  num_queues - 1) {
+            return INT_MAX;
+        }
+        
+        // For Round Robin, use time quantum
+        if (algorithm == 3) {
+            return time_quantum;
+        }
+        
+        // For FCFS, Priority, SJF: burst_time / total_queues
+        return max(1, (int)ceil(process.burst_time / (double)num_queues));
     }
     
     void positionProcesses() {
@@ -227,7 +254,7 @@ public:
         
         for (int q = 0; q < 4; q++) {
             for (size_t p = 0; p < queues[q].size(); p++) {
-                queues[q][p]->position.x = 100 + p * (process_size + 15); // Increased spacing
+                queues[q][p]->position.x = 100 + p * (process_size + 15);
                 queues[q][p]->position.y = queue_y_positions[q];
                 queues[q][p]->target_position = queues[q][p]->position;
             }
@@ -242,6 +269,11 @@ public:
         simulation_paused = false;
         simulation_completed = false;
         
+        // Clear all queues
+        for (int i = 0; i < 4; i++) {
+            queues[i].clear();
+        }
+        
         for (auto& process : processes) {
             process.remaining_time = process.burst_time;
             process.finished = false;
@@ -253,6 +285,12 @@ public:
             process.waiting_time = 0;
             process.last_execution_time = 0;
             process.time_slice_remaining = 0;
+            process.queue_index = 0; // Reset to queue 0
+            process.execution_time_in_current_queue = 0;
+            process.allowed_time_in_queue = calculateAllowedTime(process, 0);
+            
+            // Add all processes back to queue 0
+            queues[0].push_back(&process);
         }
         
         positionProcesses();
@@ -292,24 +330,39 @@ public:
             if (!process.finished) {
                 // Better positioning to prevent overlap
                 auto it = find(queues[process.queue_index].begin(), queues[process.queue_index].end(), &process);
-                int position_in_queue = it - queues[process.queue_index].begin();
-                process.target_position.x = 100 + position_in_queue * 55; // Increased spacing
-                process.target_position.y = 150 + process.queue_index * 100; // Queue positioning
+                if (it != queues[process.queue_index].end()) {
+                    int position_in_queue = it - queues[process.queue_index].begin();
+                    process.target_position.x = 100 + position_in_queue * 55;
+                    process.target_position.y = 150 + process.queue_index * 100;
+                }
             }
         }
         
-        // Check if current process should continue (for Round Robin or non-preemptive)
+        // Check if current process should continue or be moved to next queue
         if (current_executing_process && !current_executing_process->finished) {
             int current_algorithm = sequence[current_executing_queue];
             
-            // For Round Robin, check if time slice is exhausted
-            if (current_algorithm == 3) { // Round Robin
-                if (current_executing_process->time_slice_remaining > 0) {
-                    executeProcess(current_executing_process, current_algorithm);
-                    return;
+            // Check if process should be moved to next queue
+            bool should_move_to_next_queue = false;
+            
+            if (current_executing_queue < 3) { // Not the last queue
+                if (current_algorithm == 3) { // Round Robin
+                    if (current_executing_process->time_slice_remaining <= 0) {
+                        should_move_to_next_queue = true;
+                    }
+                } else { // FCFS, Priority, SJF
+                    if (current_executing_process->execution_time_in_current_queue >= current_executing_process->allowed_time_in_queue) {
+                        should_move_to_next_queue = true;
+                    }
                 }
-            } else {
-                // For non-preemptive algorithms, continue until process finishes
+            }
+            
+            if (should_move_to_next_queue && current_executing_process->remaining_time > 0) {
+                moveProcessToNextQueue(current_executing_process);
+                current_executing_process = nullptr;
+                current_executing_queue = -1;
+            } else if (current_executing_process->remaining_time > 0) {
+                // Continue executing current process
                 executeProcess(current_executing_process, current_algorithm);
                 return;
             }
@@ -327,7 +380,7 @@ public:
                 current_executing_queue = q;
                 
                 // Initialize time slice for Round Robin
-                if (sequence[q] == 3) { // Round Robin
+                if (sequence[q] == 3) {
                     current_executing_process->time_slice_remaining = time_quantum;
                 }
                 
@@ -335,6 +388,23 @@ public:
                 break;
             }
         }
+    }
+    
+    void moveProcessToNextQueue(Process* process) {
+        // Remove from current queue
+        auto& current_queue = queues[process->queue_index];
+        current_queue.erase(remove(current_queue.begin(), current_queue.end(), process), current_queue.end());
+        
+        // Move to next queue
+        process->queue_index++;
+        process->execution_time_in_current_queue = 0;
+        process->allowed_time_in_queue = calculateAllowedTime(*process, process->queue_index);
+        
+        // Add to new queue
+        queues[process->queue_index].push_back(process);
+        
+        cout << "Process P" << process->pid << " moved to Queue " << (process->queue_index + 1) << endl;
+        positionProcesses();
     }
     
     Process* selectFromQueue(int queue_index) {
@@ -405,12 +475,13 @@ public:
         }
         
         process->is_executing = true;
-        process->target_position.x = 680 + (current_time % 4) * 60; // Stagger positions to prevent overlap
-        process->target_position.y = 200 + (current_time % 6) * 50;  // Vertical staggering too
+        process->target_position.x = 680 + (current_time % 4) * 60;
+        process->target_position.y = 200 + (current_time % 6) * 50;
         process->last_execution_time = current_time;
         
         // Execute for 1 time unit
         process->remaining_time -= 1;
+        process->execution_time_in_current_queue += 1;
         
         // For Round Robin, decrease time slice
         if (algorithm == 3 && process->time_slice_remaining > 0) {
@@ -423,13 +494,15 @@ public:
             process->turnaround_time = process->completion_time - process->arrival_time;
             process->waiting_time = process->turnaround_time - process->burst_time;
             
+            // Remove from current queue
+            auto& current_queue = queues[process->queue_index];
+            current_queue.erase(remove(current_queue.begin(), current_queue.end(), process), current_queue.end());
+            
             // Clear current executing process
             current_executing_process = nullptr;
             current_executing_queue = -1;
-        } else if (algorithm == 3 && process->time_slice_remaining <= 0) {
-            // Time slice exhausted for Round Robin
-            current_executing_process = nullptr;
-            current_executing_queue = -1;
+            
+            positionProcesses();
         }
     }
     
@@ -507,11 +580,11 @@ public:
                         break;
                         
                     case sf::Keyboard::S:
-                        saveToFile("data.txt");
+                        saveToFile("mlq_data.txt");
                         break;
                         
                     case sf::Keyboard::L:
-                        loadFromFile("data.txt");
+                        loadFromFile("mlq_data.txt");
                         break;
                         
                     case sf::Keyboard::Escape:
@@ -566,7 +639,8 @@ public:
         
         float queue_y_positions[] = {140, 240, 340, 440};
         
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < num_queues; i++) {
+            float queue_y = 140 + i * 100;
             queue_bg.setPosition(50, queue_y_positions[i]);
             
             // Highlight currently executing queue
@@ -642,7 +716,7 @@ public:
             process_text.setPosition(process.position.x - 10, process.position.y - 8);
             window.draw(process_text);
             
-            // Draw remaining time
+            // Draw remaining time and queue info
             if (!process.finished) {
                 sf::Text remaining_text;
                 if (font.getInfo().family != "") {
@@ -654,6 +728,9 @@ public:
                 remaining_stream << process.remaining_time;
                 if (process.is_executing && sequence[current_executing_queue] == 3) {
                     remaining_stream << "/" << process.time_slice_remaining;
+                } else if (process.is_executing && current_executing_queue < 3) {
+                    int remaining_in_queue = process.allowed_time_in_queue - process.execution_time_in_current_queue;
+                    remaining_stream << "|" << remaining_in_queue;
                 }
                 remaining_text.setString(remaining_stream.str());
                 remaining_text.setPosition(process.position.x - 5, process.position.y + 25);
@@ -672,11 +749,12 @@ public:
         
         stringstream stats_stream;
         stats_stream << "Process Details:\n\n";
-        stats_stream << "PID AT BT P  CT TAT WT\n";
+        stats_stream << "PID AT BT P Q CT TAT WT\n";
         for (const auto& process : processes) {
             stats_stream << "P" << process.pid << "  " << setw(2) << process.arrival_time 
                         << " " << setw(2) << process.burst_time
-                        << " " << setw(1) << process.priority;
+                        << " " << setw(1) << process.priority
+                        << " " << setw(1) << (process.queue_index + 1);
             if (process.finished) {
                 stats_stream << " " << setw(3) << process.completion_time
                            << " " << setw(3) << process.turnaround_time 
@@ -704,8 +782,7 @@ public:
 };
 
 int main() {
-    cout << "=== Multilevel Queue Scheduler Visualizer ===\n";
-    
+
     MLQVisualizer visualizer;
     visualizer.loadFromFile("data.txt");
     visualizer.run();
