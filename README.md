@@ -24,6 +24,8 @@ Schedular, with 4 queues and different algorithms, simulation
 
 3 6 3               // Process 4: AT=3, BT=6, Priority=3
 
+4                   // Number of queues
+
 0 1 2 3             // Queue sequence (FCFS, Priority, SJF, RR)
 
 ---
