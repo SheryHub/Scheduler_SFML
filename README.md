@@ -37,3 +37,7 @@ Schedular, with 4 queues and different algorithms, simulation
 ## ./sch
 
 ---
+
+
+![image](https://github.com/user-attachments/assets/2cdade2b-b803-4cff-aa7d-36d452a5e885)
+
