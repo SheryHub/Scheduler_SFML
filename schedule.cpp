@@ -655,7 +655,7 @@ public:
             window.draw(queue_bg);
             
             stringstream label_stream;
-            label_stream << "Queue " << i + 1 << " (Priority " << (i + 1) << "): " 
+            label_stream << "Queue " << i + 1 << "): " 
                         << algorithm_names[sequence[i]];
             if (sequence[i] == 3) { // Round Robin
                 label_stream << " (TQ=" << time_quantum << ")";
